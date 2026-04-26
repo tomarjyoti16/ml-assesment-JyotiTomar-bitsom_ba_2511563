@@ -48,7 +48,20 @@ ________________________________________________________________________________
 **Part c**
 __________________________________________________________________________________________________________________
 
+A single global model will likely miss store-specific behavior, so a better approach is to account for heterogeneity across locations.
 
+Proposed Strategy: Segmented / Hierarchical Modeling
+Segment-Based Models
+Build separate models for different groups of stores, e.g.:
+	- Urban
+	- Semi-urban
+	- Rural
+
+Advantage of this model:
+
+- Stores in different locations have different customer behavior and demand patterns.
+- Each model learns more relevant relationships for that segment.
+- Improves prediction accuracy compared to one global model.
 
 
 ########################################################################################################################################
@@ -56,6 +69,34 @@ ________________________________________________________________________________
 __________________________________________________________________________________________________________________
 **Part a**
 __________________________________________________________________________________________________________________
+Data Integration Strategy
+
+Base table should be transactions which contains sales records. 
+It should be joined with:
+- store attributes → on store_id
+- promotion details → on promotion_id (or equivalent key)
+- calendar → on transaction_date
+
+We should uase Left Join, it should keep all records fron the transaction table and add additional details to the records.
+
+Grain of Final Dataset:
+One row = one store × one month (or time period)
+
+Before modelling below aggregate transaction-level data is required:
+
+- Target Variable:
+  	items_sold → sum per store per month
+- Numerical Features:
+  	monthly_footfall → sum or average
+	competition_density → average
+	Other numeric fields → mean/sum depending on meaning
+- Categorical Features:
+	promotion_type → most frequent (mode) or assigned promotion
+	store_size, location_type → take as constant per store
+- Calendar Features:
+	is_weekend → proportion or count of weekends
+	is_festival → binary flag (any festival in that month)
+
 
 __________________________________________________________________________________________________________________
 **Part b**
@@ -114,3 +155,108 @@ ________________________________________________________________________________
 - Feature Engineering:Create a binary feature like is_promotion to explicitly capture promotion presence.
 - Model Choice:Use models like Random Forest or Gradient Boosting, which handle imbalance better.
 - Separate Evaluation:Evaluate model performance specifically on promotion vs non-promotion subsets.
+
+################################################################################################################
+  B3: Model Evaluation and Deployment
+  _________________________________________________________________________________________________________________
+**Part a**
+__________________________________________________________________________________________________________________
+
+**Train–Test Split Strategy**
+- We should use a temporal split (no shuffling):
+	Train on the first ~80% of months (earlier period)
+	Test on the most recent ~20% of months
+- This strategy mimics real usage thus helps in predicting future sales from past data.
+
+**Random Split is Inappropriate because:**
+- It breaks the time order of data i.e. mixes past and future
+- It causes data leakage as model indirectly sees future patterns
+- It produces over-optimistic results that won’t hold true in practice
+
+Evaluation Metrics
+
+1. MAE (Mean Absolute Error):
+It measures the average difference between actual and predicted values.
+It tells us how many items, on average, the model’s prediction is off by.
+For Example: MAE = 20 means predictions are off by about 20 items.
+
+2. RMSE (Root Mean Squared Error):
+It is similar to MAE but gives more importance to large errors.
+It shows how serious the model’s biggest mistakes are.
+A higher RMSE indicates that the model makes some large prediction errors.
+
+3. MAPE (Mean Absolute Percentage Error):
+It expresses the error as a percentage.
+It tells us how far the predictions are from actual values in percentage terms.
+Example: MAPE = 10% means predictions are off by about 10%.
+
+_________________________________________________________________________________________________________________
+**Part b**
+__________________________________________________________________________________________________________________
+Explanation Using Feature Importance
+
+To understand why the model gives different promotion recommendations for the same store in different months, we would analyze feature importance and feature values.
+
+
+1. Check Feature Importance
+We should look at which features are most influential (e.g., month, is_festival, footfall, promotion_type, competition_density)
+This tells us what factors the model uses most to make decisions.
+
+2. Compare December vs March Inputs
+
+For Store 12, we would compare the feature values:
+
+December month is likely festival season thus there can be high demand that results in higher customer activity. Thus, Model prefers Loyalty Points to retain customers and increase repeat purchases.
+March month is possibly normal or low-demand period. Customers may be more price-sensitive. Thus, Model prefers Flat Discount to boost sales volume.
+
+3. Understand Model Behavior
+The model is not just learning “best promotion per store”
+It learns “best promotion based on context” (time + conditions)
+So different months have different conditions that leads to different recommendations
+
+4. Communication to Marketing Team
+
+The model considers factors like season, customer activity, and demand patterns.
+In December, customers are more active, so loyalty rewards work better.
+In March, demand is lower, so discounts are more effective in increasing sales.
+
+_________________________________________________________________________________________________________________
+**Part c**
+__________________________________________________________________________________________________________________
+
+**End-to-End Deployment Process**
+
+1. Saving the Trained Model
+After training, save the full pipeline (preprocessing + model) using joblib
+
+	import joblib
+	joblib.dump(model_pipeline, 'model.pkl')
+
+This ensures the same preprocessing steps and model are reused during prediction.
+
+2. Preparing New Monthly Data
+At the start of each month:
+- Collect latest data for all 50 stores (store features, calendar info, etc.)
+- Apply same feature engineering (e.g., date features, encoding structure)
+
+	Load the saved model:
+
+		model = joblib.load('model.pkl')
+
+	Pass new data into the model:
+
+		predictions = model.predict(new_data)
+
+3. Generating Recommendations
+For each store create multiple inputs (one for each promotion type) and predict items_sold for each option. Out of all select the promotion with highest predicted sales
+
+4. Monitoring Model Performance
+
+To ensure the model stays reliable:
+a. Track Prediction Accuracy: Compare predicted vs actual items_sold monthly. Monitor metrics like RMSE and MAE
+b. Data Drift Monitoring: Check if new data differs significantly from training data(e.g., changes in customer behavior, competition)
+c. Performance Degradation: If error metrics increase consistently, model may be outdated and we have to create new model.
+
+5. Retraining Strategy
+We can retrain the model periodically (e.g., every 3–6 months), or when performance drops significantly
+We should use latest data to capture new trends.
